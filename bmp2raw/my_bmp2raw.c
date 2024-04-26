@@ -42,12 +42,10 @@ resolution read_resolution_from_config(void) {
         goto parsing_err;
     }
     
-    debug_print(DEBUG, "dev_resolution.width:%d\tdev_resolution.height:%d\t\n",dev_resolution.width,dev_resolution.height);
-
-
 parsing_err:
     fclose(file);
 open_config_file_err:
+    debug_print(DEBUG, "dev_resolution.width:%d\tdev_resolution.height:%d\t\n",dev_resolution.width,dev_resolution.height);
     return dev_resolution;
 }
 
@@ -82,27 +80,16 @@ void rotateImage(uint8_t *src, uint8_t *dest, int width, int height, int rotatio
         }
     }
 }
-
-int main(int argc, char *argv[]) 
+int process_command_line_arguments(int argc, char *argv[],char **bmp_file_name,int *rotation)
 {
+    
     int ret = 1;
-    int opt = 0;
-    int color_palette_color_number = 0;
-    int rows_data_size = 0;
-
-    char *bmp_file_name = NULL;
-    const char *optstring = "d";
-
-
-    /*读取配置文件*/
-    /*如果能读取到设备分辨率，只计算屏幕大小数据*/
-    resolution device_resolution = read_resolution_from_config();
-    if(device_resolution.height > 0 && device_resolution.width > 0)
+    if(NULL == bmp_file_name || NULL == rotation)
     {
-        debug_print(INFO, "Device Resolution: %d x %d\n", device_resolution.width, device_resolution.height);
+        goto cmd_line_parameter_err;
     }
-
-
+    int opt = 0;
+    const char *optstring = "d";
     /*-d参数表示打印DEBUG日志*/
     while ((opt = getopt(argc, argv, optstring)) != -1) 
     {
@@ -133,7 +120,7 @@ int main(int argc, char *argv[])
 
     if(NULL != argv[extra_arg_index] && strlen(argv[extra_arg_index]) > 0)
     {
-        bmp_file_name = argv[extra_arg_index];
+        *bmp_file_name = argv[extra_arg_index];
     }
     else
     {
@@ -141,9 +128,30 @@ int main(int argc, char *argv[])
         ret = 1;
         goto file_name_err;
     }
-    debug_print(DEBUG, "bmp_file_name:%s\trotation:%d\t\n",bmp_file_name,rotation);
+    debug_print(DEBUG, "bmp_file_name:%s\trotation:%d\t\n",*bmp_file_name,rotation);
+    ret = 0;
+file_name_err:
+cmd_line_parameter_err:
+    return ret;
+}
+int main(int argc, char *argv[]) 
+{
+    int ret = 1;
+    int color_palette_color_number = 0;
+    int rows_data_size = 0;
+    char *bmp_file_name = NULL;
+    int rotation = 0;
 
-    
+    /*读取配置文件*/
+    /*如果能读取到设备分辨率，只计算屏幕大小数据*/
+    resolution device_resolution = read_resolution_from_config();
+
+
+    ret = process_command_line_arguments(argc,argv,&bmp_file_name,&rotation);
+    if(ret != 0)
+    {
+        goto cmd_line_parameter_err;
+    }
 
     /*打开文件*/
     int fd = open(bmp_file_name, O_RDONLY);
@@ -189,7 +197,7 @@ int main(int argc, char *argv[])
     
 
     debug_print(DEBUG, "bfOffBits:%d\t\n",bfh->bfOffBits);
-    /*判断是否有调色盘*/
+    /*计算调色盘大小*/
     int color_palette_size = bfh->bfOffBits - sizeof(BITMAPFILEHEADER) - sizeof(BITMAPINFOHEADER);
     if(color_palette_size> 0)
     {
@@ -285,7 +293,7 @@ int main(int argc, char *argv[])
 
             debug_print(DEBUG, "row_offset:%d\toffset_data:%x\t\n",row_offset,*((unsigned int *)offset_data));
 
-            /*计算偏移到哪几位*/
+            /*计算偏移到哪一列*/
             switch(bih->biBitCount)
             {
                 case 1 :
@@ -312,26 +320,7 @@ int main(int argc, char *argv[])
         }
         i++;
     }
-   
     
-    int padding = (4 - (bih->biWidth * (bih->biBitCount / 8)) % 4) % 4;
-    int dataSize = (bih->biWidth * (bih->biBitCount / 8) + padding) * bih->biHeight;
-    debug_print(DEBUG, "padding:%d\tdataSize:%d\t\n",padding,dataSize);
-    
-#if 0
-    uint8_t *rotatedData = (uint8_t *)malloc(dataSize * sizeof(uint8_t));
-
-    // Rotate image 90 degrees
-    rotateImage((uint8_t *)((char *)data + bfh->bfOffBits), rotatedData, bih->biWidth, bih->biHeight, 90, bih->biBitCount);
-
-    FILE *rawFile = fopen("output_rotated.raw", "wb");  
-    fwrite(rotatedData, 1, dataSize, rawFile);
-
-    fclose(rawFile);
-    free(rotatedData);
-    munmap(data, file_stat.st_size);
-#endif
-
     ret = 0;
 
 
@@ -344,7 +333,6 @@ file_header_magic_err:
 fstat_file_err:
     close(fd);
 open_bmp_file_err:
-file_name_err:
 cmd_line_parameter_err:
     return ret;
 }
