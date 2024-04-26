@@ -87,8 +87,8 @@ int main(int argc, char *argv[])
 {
     int ret = 1;
     int opt = 0;
-    int color_palette_flag = 0;
     int color_palette_color_number = 0;
+    int rows_data_size = 0;
 
     char *bmp_file_name = NULL;
     const char *optstring = "d";
@@ -111,13 +111,25 @@ int main(int argc, char *argv[])
                 debug_level++;
                 break;
             default:
-                fprintf(stderr, "Usage: %s [-d]\n", argv[0]);
+                debug_print(ERROR, "Command line parameter error\n");
                 ret = 1;
-                goto getopt_err;
+                goto cmd_line_parameter_err;
         }
     }
 
     int extra_arg_index = optind;
+    int rotation = 0;
+    /*判断是否为两个参数*/
+    if(argc == extra_arg_index + 2)
+    {
+        rotation = atoi(argv[extra_arg_index + 1]);
+    }
+    else
+    {
+        debug_print(ERROR, "Command line parameter error\n");
+        ret = 1;
+        goto cmd_line_parameter_err;
+    }
 
     if(NULL != argv[extra_arg_index] && strlen(argv[extra_arg_index]) > 0)
     {
@@ -129,7 +141,7 @@ int main(int argc, char *argv[])
         ret = 1;
         goto file_name_err;
     }
-    debug_print(DEBUG, "bmp_file_name:%s\t\n",bmp_file_name);
+    debug_print(DEBUG, "bmp_file_name:%s\trotation:%d\t\n",bmp_file_name,rotation);
 
     
 
@@ -181,38 +193,126 @@ int main(int argc, char *argv[])
     int color_palette_size = bfh->bfOffBits - sizeof(BITMAPFILEHEADER) - sizeof(BITMAPINFOHEADER);
     if(color_palette_size> 0)
     {
-        color_palette_flag = 1;
         color_palette_color_number = color_palette_size / PALETTE_EACH_COLOR_OCCUPIES_SIZE;
     }
     else
     {
-        color_palette_flag = 0;
+        color_palette_color_number = 0;
     }
 
-    uint8_t *color_palette_date = (uint8_t *)((char *)data + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
-    uint8_t *bitmap_data = (uint8_t *)(color_palette_date + color_palette_size);
+    uint32_t *color_palette_date = (uint32_t *)((uint8_t *)data + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER));
+    uint8_t *bitmap_data = (uint8_t *)(color_palette_date + color_palette_color_number);
+
+    printf("color_palette_date: %x\n", *((unsigned int *)color_palette_date));
+    printf("bitmap_data: %x\n", *((unsigned int *)bitmap_data));
 
     debug_print(INFO, "Image bit depth:%d\tbiWidth:%d\tbiHeight:%d\tbiSizeImage:%d\t\n",bih->biBitCount,bih->biWidth,bih->biHeight,bih->biSizeImage);
-    debug_print(DEBUG, "color_palette_flag:%d\tcolor_palette_color_number:%d\t\n",color_palette_flag,color_palette_color_number);
-    /*读取文件位深度*/
-    /*位深度 影响数据区大小，颜色映射位置*/
-    switch(bih->biBitCount)
+    debug_print(DEBUG, "color_palette_color_number:%d\t\n",color_palette_color_number);
+
+
+
+    /*读取数据写入raw文件*/
+    int row = 0;
+    int col = 0;
+    int image_row_height = abs(bih->biHeight);//BMP图片的行高可能为负数，负数代表图像是倒向的，负数代表图像是正向的。
+
+    /*如果图片超过设备大小，只转换设备分辨率的图片*/
+    row = (image_row_height > device_resolution.height) ? device_resolution.height : image_row_height;
+    col = (bih->biWidth > device_resolution.width) ? device_resolution.width : bih->biWidth;
+
+    debug_print(INFO, "row:%d\tcol:%d\t\n",row,col);
+
+    if(bih->biWidth > 0)
     {
-        case 1 :
-        break;
-        case 4 :
-        break;
-        case 8 :
-        break;
-        case 16 :
-        break;
-        case 24 :
-        break;
-        case 32 :
-        break;
-        default:
-        break;
+        rows_data_size = bih->biSizeImage / bih->biHeight;
     }
+    else
+    {
+        ret = 1;
+        debug_print(ERROR, "Rows data size err\n");
+        goto rows_data_size_err;
+    }
+
+    /*打开输出raw data的文件*/
+    FILE *rawFile = fopen("output_rotated.raw", "wb");
+    if (NULL == rawFile) {
+        debug_print(ERROR, "Error opening output rotated file\n");
+        goto open_output_rotated_file_err;
+    }
+
+
+    /*读取颜色数据*/
+    debug_print(DEBUG, "rows_data_size:%d\t\n",rows_data_size);
+    int i = 0;
+    while(i < row)
+    {
+        
+        
+        int j = 0;
+        while(j < col)
+        {
+            
+            uint32_t bitmap_index = 0;
+            int ros_destIndex = 0;
+            int col_destIndex = 0;
+
+            /*计算旋转的偏移量*/
+            uint32_t *color_palette_color_data = NULL;
+            switch (rotation)
+            {
+                case 90:
+                    ros_destIndex = row - j - 1;
+                    col_destIndex = i;
+                    break;
+                case 180:
+                    ros_destIndex = row - i - 1;
+                    col_destIndex = col - j - 1;
+                    break;
+                case 270:
+                    ros_destIndex = j;
+                    col_destIndex = col - i - 1;
+                    break;
+                default :
+                    ros_destIndex = i;
+                    col_destIndex = j;
+                    break;
+            }
+            debug_print(DEBUG, "ros_destIndex:%d\toffset_data:%d\t\n",ros_destIndex,col_destIndex);
+
+            /*计算偏移到哪一行，信息头中的高度如果是负数说明图片是倒向，需要从最后一行开始读*/
+            int row_offset = (bih->biHeight > 0) ? bih->biHeight - ros_destIndex - 1 : ros_destIndex;
+            uint8_t *offset_data = (uint8_t *)(bitmap_data + (rows_data_size * row_offset));
+
+            debug_print(DEBUG, "row_offset:%d\toffset_data:%x\t\n",row_offset,*((unsigned int *)offset_data));
+
+            /*计算偏移到哪几位*/
+            switch(bih->biBitCount)
+            {
+                case 1 :
+                    bitmap_index = ((*(offset_data + col_destIndex / 8)) >> (8 - col_destIndex - 1)) & 0x01;
+                    color_palette_color_data = (uint32_t*)(color_palette_date + bitmap_index);
+                    debug_print(DEBUG, "bitmap_index:%02x\toffset:%d\tcolor_palette_color_data:%08x\t\n",bitmap_index,j / 8,*((unsigned int *)color_palette_color_data));
+                    break;
+                case 4 :
+                break;
+                case 8 :
+                break;
+                case 16 :
+                break;
+                case 24 :
+                break;
+                case 32 :
+                break;
+                default:
+                break;
+            }
+            
+            fwrite(color_palette_color_data,sizeof(uint32_t), 1, rawFile);
+            j++;
+        }
+        i++;
+    }
+   
     
     int padding = (4 - (bih->biWidth * (bih->biBitCount / 8)) % 4) % 4;
     int dataSize = (bih->biWidth * (bih->biBitCount / 8) + padding) * bih->biHeight;
@@ -233,12 +333,18 @@ int main(int argc, char *argv[])
 #endif
 
     ret = 0;
+
+
+    fclose(rawFile);
+open_output_rotated_file_err:
+    munmap(data, file_stat.st_size);
+rows_data_size_err:
 mmap_err:
 file_header_magic_err:
 fstat_file_err:
     close(fd);
 open_bmp_file_err:
 file_name_err:
-getopt_err:
+cmd_line_parameter_err:
     return ret;
 }
