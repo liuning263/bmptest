@@ -146,7 +146,7 @@ int main(int argc, char *argv[])
     /*如果能读取到设备分辨率，只计算屏幕大小数据*/
     resolution device_resolution = read_resolution_from_config();
 
-
+    /*读取命令行*/
     ret = process_command_line_arguments(argc,argv,&bmp_file_name,&rotation);
     if(ret != 0)
     {
