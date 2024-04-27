@@ -49,37 +49,6 @@ open_config_file_err:
     return dev_resolution;
 }
 
-void rotateImage(uint8_t *src, uint8_t *dest, int width, int height, int rotation, int bitCount) {
-    int i, j;
-    for (i = 0; i < height; i++) {
-        for (j = 0; j < width; j++) {
-            int srcIndex = (i * width + j) * (bitCount / 8);
-            int destIndex = 0;
-            switch (rotation) {
-                case 90:
-                    destIndex = ((width - j - 1) * height + i) * 4;
-                    break;
-                case 180:
-                    destIndex = ((height - i - 1) * width + (width - j - 1)) * 4;
-                    break;
-                case 270:
-                    destIndex = (j * height + (height - i - 1)) * 4;
-                    break;
-            }
-            if (bitCount == 24) {
-                dest[destIndex] = 0xFF; // Alpha channel
-                dest[destIndex + 1] = src[srcIndex + 2]; // Red channel
-                dest[destIndex + 2] = src[srcIndex + 1]; // Green channel
-                dest[destIndex + 3] = src[srcIndex]; // Blue channel
-            } else if (bitCount == 32) {
-                dest[destIndex] = src[srcIndex + 3]; // Alpha channel
-                dest[destIndex + 1] = src[srcIndex + 2]; // Red channel
-                dest[destIndex + 2] = src[srcIndex + 1]; // Green channel
-                dest[destIndex + 3] = src[srcIndex]; // Blue channel
-            }
-        }
-    }
-}
 int process_command_line_arguments(int argc, char *argv[],char **bmp_file_name,int *rotation)
 {
     
@@ -105,11 +74,10 @@ int process_command_line_arguments(int argc, char *argv[],char **bmp_file_name,i
     }
 
     int extra_arg_index = optind;
-    int rotation = 0;
     /*判断是否为两个参数*/
     if(argc == extra_arg_index + 2)
     {
-        rotation = atoi(argv[extra_arg_index + 1]);
+        *rotation = atoi(argv[extra_arg_index + 1]);
     }
     else
     {
@@ -128,7 +96,7 @@ int process_command_line_arguments(int argc, char *argv[],char **bmp_file_name,i
         ret = 1;
         goto file_name_err;
     }
-    debug_print(DEBUG, "bmp_file_name:%s\trotation:%d\t\n",*bmp_file_name,rotation);
+    debug_print(DEBUG, "bmp_file_name:%s\trotation:%d\t\n",*bmp_file_name,*rotation);
     ret = 0;
 file_name_err:
 cmd_line_parameter_err:
@@ -242,8 +210,8 @@ int main(int argc, char *argv[])
     }
 
     /*打开输出raw data的文件*/
-    FILE *rawFile = fopen("output_rotated.raw", "wb");
-    if (NULL == rawFile) {
+    FILE *raw_file = fopen("output_rotated.raw", "wb");
+    if (NULL == raw_file) {
         debug_print(ERROR, "Error opening output rotated file\n");
         goto open_output_rotated_file_err;
     }
@@ -260,7 +228,8 @@ int main(int argc, char *argv[])
         while(j < col)
         {
             
-            uint32_t bitmap_index = 0;
+            uint32_t color_palette_index = 0;
+            uint32_t write_data = 0;
             int ros_destIndex = 0;
             int col_destIndex = 0;
 
@@ -285,7 +254,7 @@ int main(int argc, char *argv[])
                     col_destIndex = j;
                     break;
             }
-            debug_print(DEBUG, "ros_destIndex:%d\toffset_data:%d\t\n",ros_destIndex,col_destIndex);
+            debug_print(DEBUG, "ros_destIndex:%d\tcol_destIndex:%d\t\n",ros_destIndex,col_destIndex);
 
             /*计算偏移到哪一行，信息头中的高度如果是负数说明图片是倒向，需要从最后一行开始读*/
             int row_offset = (bih->biHeight > 0) ? bih->biHeight - ros_destIndex - 1 : ros_destIndex;
@@ -297,34 +266,81 @@ int main(int argc, char *argv[])
             switch(bih->biBitCount)
             {
                 case 1 :
-                    bitmap_index = ((*(offset_data + col_destIndex / 8)) >> (8 - col_destIndex - 1)) & 0x01;
-                    color_palette_color_data = (uint32_t*)(color_palette_date + bitmap_index);
-                    debug_print(DEBUG, "bitmap_index:%02x\toffset:%d\tcolor_palette_color_data:%08x\t\n",bitmap_index,j / 8,*((unsigned int *)color_palette_color_data));
+                    /*先计算出在哪个字节字节中，然后右移到该位，*/
+                    color_palette_index = ((*(offset_data + col_destIndex / 8)) >> (8 - col_destIndex - 1)) & 0x01;
+                    color_palette_color_data = (uint32_t*)(color_palette_date + color_palette_index);
+                    debug_print(DEBUG, "color_palette_index:%d\tcolor_palette_color_data:%08x\t\n",color_palette_index,*((uint32_t *)color_palette_color_data));
                     break;
                 case 4 :
+                    /*先计算出在哪个字节字节中，然后找出具体索引号*/
+                    color_palette_index = ((*(offset_data + col_destIndex / 2)) >> ((col_destIndex % 2 == 0) ? 4: 0)) & 0x0f;
+                    color_palette_color_data = (uint32_t*)(color_palette_date + color_palette_index);
+                    debug_print(DEBUG, "color_palette_index:%d\tcolor_palette_color_data:%08x\t\n",color_palette_index,*((uint32_t *)color_palette_color_data));
                 break;
                 case 8 :
+                    /*直接读取该字节的值*/
+                    color_palette_index = *(offset_data + col_destIndex);
+                    color_palette_color_data = (uint32_t*)(color_palette_date + color_palette_index);
+                    debug_print(DEBUG, "color_palette_index:%d\tcolor_palette_color_data:%08x\t\n",color_palette_index,*((uint32_t *)color_palette_color_data));
                 break;
                 case 16 :
+                    /*判断是否使用mask方式*/
+                    uint32_t color_data = (uint32_t)(((*(offset_data + col_destIndex * 2)) << 8) | *(offset_data + col_destIndex * 2 + 1));
+                    if(color_palette_size == MASK_COLOR_PALETTE_SIZE)
+                    {
+                        uint32_t r_mask_data = (((uint32_t)*(color_palette_date )) << 8) | *(offset_data + 1);
+                        uint32_t g_mask_data = (((uint32_t)*(color_palette_date +  2)) << 8) | *(offset_data + 3);
+                        uint32_t b_mask_data = (((uint32_t)*(color_palette_date +  4)) << 8) | *(offset_data + 5);
+
+                        uint8_t r_data = (color_data & r_mask_data) >> 8;
+                        uint8_t g_data = (color_data & g_mask_data) >> 3;
+                        uint8_t b_data = (color_data & b_mask_data) << 3;
+
+                        write_data = (0xFF << 24) | (r_data << 16) | (g_data << 8) | b_data;
+
+                    }
+                    else
+                    {
+                        uint8_t r_data = (color_data >> 11) & 0x1F;
+                        uint8_t g_data  = (color_data >> 5) & 0x3F;
+                        uint8_t b_data = color_data & 0x1F; 
+
+                        /*补偿精度*/
+                        r_data = (r_data * 255) / 31;
+                        g_data = (g_data * 255) / 63;
+                        b_data = (b_data * 255) / 31;
+
+                        write_data = (0xFF << 24) | (r_data << 16) | (g_data << 8) | b_data;
+                    }
                 break;
                 case 24 :
+                    write_data = (uint32_t)(0xff000000 | ((*(offset_data + col_destIndex * 3)) << 16) | ((*(offset_data + col_destIndex * 3 + 1)) << 8) | *(offset_data + col_destIndex * 3 + 2));
                 break;
                 case 32 :
+                    write_data = (uint32_t)(((*(offset_data + col_destIndex * 4)) << 24) | *(offset_data + col_destIndex * 4 + 1) | *(offset_data + col_destIndex * 4 + 2) | *(offset_data + col_destIndex * 4 + 3));
                 break;
                 default:
                 break;
             }
             
-            fwrite(color_palette_color_data,sizeof(uint32_t), 1, rawFile);
+            if(NULL != color_palette_color_data)
+            {
+                /*将透明度通道设置为0xff，写入文件中*/
+                write_data = *color_palette_color_data | 0xff000000;
+                debug_print(DEBUG, "write_data:%08x\t\n",write_data);
+                
+            }
+            fwrite(&write_data,sizeof(uint32_t), 1, raw_file);
             j++;
         }
+        debug_print(DEBUG, "One line write completed\n");
         i++;
     }
     
     ret = 0;
 
 
-    fclose(rawFile);
+    fclose(raw_file);
 open_output_rotated_file_err:
     munmap(data, file_stat.st_size);
 rows_data_size_err:

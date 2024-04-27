@@ -10,6 +10,8 @@
 
 #define PALETTE_EACH_COLOR_OCCUPIES_SIZE 4
 
+#define MASK_COLOR_PALETTE_SIZE 4
+
 #define BUFFER_SIZE 1024
 
 #define CONFIG_FILE_NAME "config.txt"
