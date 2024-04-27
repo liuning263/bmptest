@@ -102,25 +102,12 @@ file_name_err:
 cmd_line_parameter_err:
     return ret;
 }
-int main(int argc, char *argv[]) 
+
+int write_raw_data(char *bmp_file_name,int rotation,resolution device_resolution)
 {
     int ret = 1;
-    int color_palette_color_number = 0;
     int rows_data_size = 0;
-    char *bmp_file_name = NULL;
-    int rotation = 0;
-
-    /*读取配置文件*/
-    /*如果能读取到设备分辨率，只计算屏幕大小数据*/
-    resolution device_resolution = read_resolution_from_config();
-
-    /*读取命令行*/
-    ret = process_command_line_arguments(argc,argv,&bmp_file_name,&rotation);
-    if(ret != 0)
-    {
-        goto cmd_line_parameter_err;
-    }
-
+    int color_palette_color_number = 0;
     /*打开文件*/
     int fd = open(bmp_file_name, O_RDONLY);
     if (fd == -1)
@@ -138,17 +125,7 @@ int main(int argc, char *argv[])
         goto fstat_file_err;
     }
 
-    /*初步验证合法性*/
-    /*判断文件前两个字节是否是 0x424d。文件是否大于54字节*/
-    char buffer[CHECK_BM_BUFFER_SIZE + 1] = "";
-    read(fd, buffer, CHECK_BM_BUFFER_SIZE);
-    debug_print(DEBUG, "buffer:%s\tst_size:%ld\t\n",buffer,file_stat.st_size);
-    if (strncmp(buffer,CHECK_BM_STR,CHECK_BM_BUFFER_SIZE) != 0 && file_stat.st_size >= (sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)) )
-    {
-        debug_print(ERROR, "File does not start with 'BM'.\n");
-        ret = 1;
-        goto file_header_magic_err;
-    }
+    
 
     /*使用mmap考虑到可能会有比较大的文件进行转换，在旋转时直接读取数据偏移 向raw文件中写，这样不需要额外的内存，而且不需要大小端转换*/
     /*将文件映射到内存中*/
@@ -163,6 +140,16 @@ int main(int argc, char *argv[])
     BITMAPINFOHEADER *bih = (BITMAPINFOHEADER *)((char *)data + sizeof(BITMAPFILEHEADER));
     
     
+    /*初步验证合法性*/
+    /*判断文件前两个字节是否是 0x424d。文件是否大于54字节*/
+    debug_print(DEBUG, "bfType:%x\tst_size:%ld\t\n",bfh->bfType,file_stat.st_size);
+    if (bfh->bfType != 0x4d42  || file_stat.st_size < (sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)) )
+    {
+        debug_print(ERROR, "BMP file header error\n");
+        ret = 1;
+        goto file_header_magic_err;
+    }
+
 
     debug_print(DEBUG, "bfOffBits:%d\t\n",bfh->bfOffBits);
     /*计算调色盘大小*/
@@ -186,7 +173,7 @@ int main(int argc, char *argv[])
     debug_print(DEBUG, "color_palette_color_number:%d\t\n",color_palette_color_number);
 
 
-
+    
     /*读取数据写入raw文件*/
     int row = 0;
     int col = 0;
@@ -342,13 +329,38 @@ int main(int argc, char *argv[])
 
     fclose(raw_file);
 open_output_rotated_file_err:
-    munmap(data, file_stat.st_size);
 rows_data_size_err:
-mmap_err:
 file_header_magic_err:
+    munmap(data, file_stat.st_size);
+mmap_err:
 fstat_file_err:
     close(fd);
 open_bmp_file_err:
+    return ret;
+}
+
+int main(int argc, char *argv[]) 
+{
+    int ret = 1;
+    char *bmp_file_name = NULL;
+    int rotation = 0;
+
+    /*读取配置文件*/
+    /*如果能读取到设备分辨率，只计算屏幕大小数据*/
+    resolution device_resolution = read_resolution_from_config();
+
+    /*读取命令行*/
+    ret = process_command_line_arguments(argc,argv,&bmp_file_name,&rotation);
+    if(ret != 0)
+    {
+        goto cmd_line_parameter_err;
+    }
+
+    /*写入raw数据*/
+    ret = write_raw_data(bmp_file_name,rotation,device_resolution);
+
+
+
 cmd_line_parameter_err:
     return ret;
 }

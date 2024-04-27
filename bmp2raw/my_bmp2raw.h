@@ -16,8 +16,6 @@
 
 #define CONFIG_FILE_NAME "config.txt"
 
-#define CHECK_BM_STR "BM"
-#define CHECK_BM_BUFFER_SIZE 2
 
 /*保存BMP文件的信息头*/
 #pragma pack(push, 1)
