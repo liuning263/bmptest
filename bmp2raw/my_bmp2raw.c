@@ -177,7 +177,7 @@ int write_raw_data(char *bmp_file_name,int rotation,resolution device_resolution
     /*读取数据写入raw文件*/
     int row = 0;
     int col = 0;
-    int image_row_height = abs(bih->biHeight);//BMP图片的行高可能为负数，负数代表图像是倒向的，负数代表图像是正向的。
+    int image_row_height = abs(bih->biHeight);//BMP图片的行高可能为负数，正数代表图像是倒向的，负数代表图像是正向的。
 
     /*如果图片超过设备大小，只转换设备分辨率的图片*/
     row = (image_row_height > device_resolution.height) ? device_resolution.height : image_row_height;
